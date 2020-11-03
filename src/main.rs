@@ -1,6 +1,3 @@
-extern crate futures;
-extern crate hyper;
-
 #[macro_use]
 extern crate lazy_static;
 #[macro_use]
@@ -9,13 +6,11 @@ extern crate serde_yaml;
 #[macro_use]
 extern crate serde_derive;
 
-use futures::Future;
-use hyper::service::service_fn_ok;
-use hyper::{Body, Method, Response, Server, StatusCode};
 use std::env;
 use std::fs::File;
-use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+use std::net::SocketAddr;
 use std::process::Command;
+use warp::Filter;
 
 lazy_static! {
     pub static ref CONFIG: Configuration = { get_config() };
@@ -30,9 +25,10 @@ pub struct Configuration {
     faucet_addr: String,
     unit: String,
     node_addr: String,
+    secret: String, // make sure random people can't call the faucet
 }
 
-fn run_command(c: String) -> (bool, String, String) {
+fn run_command(c: String) -> Result<String, String> {
     let c_vec: Vec<&str> = c.split(" ").collect();
     let binary = c_vec[0];
     let output = Command::new(binary)
@@ -43,17 +39,18 @@ fn run_command(c: String) -> (bool, String, String) {
     let stdout = String::from_utf8(output.stdout).expect("Found invalid UTF-8");
     let stderr = String::from_utf8(output.stderr).expect("Found invalid UTF-8");
     println!("{}\n{}", stdout, stderr);
-    return (output.status.success(), stdout, stderr);
+    match output.status.success() {
+        true => Ok(stdout),
+        false => Err(stderr),
+    }
 }
 
-fn send_tx(config: &Configuration) -> (bool, String, String) {
+fn send_tx(config: &Configuration, dest_addr: String, amount: String) -> Result<String, String> {
     let cli_options = format!(
-        "--home {} --keyring-backend test --chain-id {}",
-        config.cli_config_path, config.chain_id
+        "--home {} --keyring-backend test --chain-id {} --node tcp://{} -o json",
+        config.cli_config_path, config.chain_id, config.node_addr
     );
 
-    let amount = "500drop";
-    let dest_addr = "cosmosBLABLA";
     let cli_send = format!(
         "{} tx send {} {} {} {} --yes",
         config.cli_binary_path, config.faucet_addr, dest_addr, amount, cli_options
@@ -61,9 +58,9 @@ fn send_tx(config: &Configuration) -> (bool, String, String) {
     return run_command(cli_send);
 }
 
-fn status(config: &Configuration) -> (bool, String, String) {
+fn status(config: &Configuration) -> Result<String, String> {
     let cli_status = format!(
-        "{} status --node tcp://{}",
+        "{} status --node tcp://{} -o json",
         config.cli_binary_path, config.node_addr
     );
     return run_command(cli_status);
@@ -77,39 +74,25 @@ fn get_config() -> Configuration {
     return config;
 }
 
-fn main() {
-    // Create a closure called router - it's a function that will return another
-    // function. This other function will be our HTTP handler.
-    let router = || {
-        // service_fn_ok() wraps a (HTTP request) handler function inside a
-        // service handler
-        service_fn_ok(|req| {
-            // Here we construct a response. Use pattern matching to match
-            // against a tuple of (HTTP_METHOD, HTTP_PATH)
-            match (req.method(), req.uri().path()) {
-                (&Method::GET, "/status") => {
-                    // json!() is a macro. It turns a JSON object into a Rust
-                    // object, then calls .to_string() on it
-                    let (success, stdout, stderr) = status(&CONFIG);
-                    Response::new(Body::from(
-                        json!({"success": success, "stdout": stdout, "stderr": stderr}).to_string(),
-                    ))
-                }
-                (_, _) => {
-                    let mut res = Response::new(Body::from("not found"));
+#[tokio::main]
+async fn main() {
+    // GET /status
+    let status = warp::path!("status").map(|| {
+        let ans = status(&CONFIG).unwrap();
+        let ans_j: serde_json::Value = serde_json::from_str(&ans).unwrap();
+        warp::reply::json(&ans_j)
+    });
 
-                    // tell me where you keep your status code, so I can change
-                    // it to my new 404 code
-                    *res.status_mut() = StatusCode::NOT_FOUND;
-                    res
-                }
-            }
-        })
-    };
+    // POST /send/cosmosaddr/amount
+    let send = warp::post().and(warp::path!("send" / String / String)).map(
+        |dest_addr: String, amount: String| {
+            println!("Oh man a POST happened! with param {}", dest_addr);
+            let ans = send_tx(&CONFIG, dest_addr, amount).unwrap();
+            let ans_j: serde_json::Value = serde_json::from_str(&ans).unwrap();
+            warp::reply::json(&ans_j)
+        },
+    );
 
-    let addr = "127.0.0.1:8080".parse().unwrap(); // Rust knows this will be a SocketAddr because this variable is later used in a function that takes a SocketAddr
-    let server = Server::bind(&addr).serve(router); // we are letting bind() use the &addr reference, but not own it. This also means addr is immutable to bind()
-    hyper::rt::run(server.map_err(|e| {
-        eprintln!("server error: {}", e);
-    }))
+    let routes = warp::get().and(status).or(warp::post().and(send));
+    warp::serve(routes).run(([127, 0, 0, 1], 8080)).await;
 }
