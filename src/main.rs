@@ -2,6 +2,8 @@ extern crate futures;
 extern crate hyper;
 
 #[macro_use]
+extern crate lazy_static;
+#[macro_use]
 extern crate serde_json;
 extern crate serde_yaml;
 #[macro_use]
@@ -15,8 +17,12 @@ use std::fs::File;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::process::Command;
 
+lazy_static! {
+    pub static ref CONFIG: Configuration = { get_config() };
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
-struct Configuration {
+pub struct Configuration {
     listen_addr: SocketAddr,
     chain_id: String,
     cli_binary_path: String,
@@ -82,10 +88,9 @@ fn main() {
             // against a tuple of (HTTP_METHOD, HTTP_PATH)
             match (req.method(), req.uri().path()) {
                 (&Method::GET, "/status") => {
-                    let c = get_config();
                     // json!() is a macro. It turns a JSON object into a Rust
                     // object, then calls .to_string() on it
-                    let (success, stdout, stderr) = status(&c);
+                    let (success, stdout, stderr) = status(&CONFIG);
                     Response::new(Body::from(
                         json!({"success": success, "stdout": stdout, "stderr": stderr}).to_string(),
                     ))
