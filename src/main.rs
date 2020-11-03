@@ -12,9 +12,10 @@ use hyper::service::service_fn_ok;
 use hyper::{Body, Method, Response, Server, StatusCode};
 use std::env;
 use std::fs::File;
-use std::net::SocketAddr;
+use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+use std::process::Command;
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 struct Configuration {
     listen_addr: SocketAddr,
     chain_id: String,
@@ -22,15 +23,55 @@ struct Configuration {
     cli_config_path: String,
     faucet_addr: String,
     unit: String,
+    node_addr: String,
 }
-fn main() {
+
+fn run_command(c: String) -> (bool, String, String) {
+    let c_vec: Vec<&str> = c.split(" ").collect();
+    let binary = c_vec[0];
+    let output = Command::new(binary)
+        .args(&c_vec[1..])
+        .output()
+        .expect("Could not execute launchpayloadcli command");
+
+    let stdout = String::from_utf8(output.stdout).expect("Found invalid UTF-8");
+    let stderr = String::from_utf8(output.stderr).expect("Found invalid UTF-8");
+    println!("{}\n{}", stdout, stderr);
+    return (output.status.success(), stdout, stderr);
+}
+
+fn send_tx(config: &Configuration) -> (bool, String, String) {
+    let cli_options = format!(
+        "--home {} --keyring-backend test --chain-id {}",
+        config.cli_config_path, config.chain_id
+    );
+
+    let amount = "500drop";
+    let dest_addr = "cosmosBLABLA";
+    let cli_send = format!(
+        "{} tx send {} {} {} {} --yes",
+        config.cli_binary_path, config.faucet_addr, dest_addr, amount, cli_options
+    );
+    return run_command(cli_send);
+}
+
+fn status(config: &Configuration) -> (bool, String, String) {
+    let cli_status = format!(
+        "{} status --node tcp://{}",
+        config.cli_binary_path, config.node_addr
+    );
+    return run_command(cli_status);
+}
+
+fn get_config() -> Configuration {
     let args: Vec<String> = env::args().collect();
     let config_path = &args[1];
-    println!("Searching for {}", config_path);
     let f = File::open(config_path).unwrap();
     let config: Configuration = serde_yaml::from_reader(f).unwrap();
-    println!("{:?}", config);
+    return config;
+}
 
+fn main() {
     // Create a closure called router - it's a function that will return another
     // function. This other function will be our HTTP handler.
     let router = || {
@@ -40,10 +81,14 @@ fn main() {
             // Here we construct a response. Use pattern matching to match
             // against a tuple of (HTTP_METHOD, HTTP_PATH)
             match (req.method(), req.uri().path()) {
-                (&Method::GET, "/ping") => {
+                (&Method::GET, "/status") => {
+                    let c = get_config();
                     // json!() is a macro. It turns a JSON object into a Rust
                     // object, then calls .to_string() on it
-                    Response::new(Body::from(json!({"message": "pong"}).to_string()))
+                    let (success, stdout, stderr) = status(&c);
+                    Response::new(Body::from(
+                        json!({"success": success, "stdout": stdout, "stderr": stderr}).to_string(),
+                    ))
                 }
                 (_, _) => {
                     let mut res = Response::new(Body::from("not found"));

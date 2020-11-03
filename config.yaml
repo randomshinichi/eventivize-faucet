@@ -1,7 +1,0 @@
----
-listen_addr: "127.0.0.1:8000"
-chain_id: "drop-28b10d4eff415a7b0b2c"
-cli_binary_path: "/tmp/workspace/bin/launchpayloadcli"
-cli_config_path: "/tmp/workspace/bin/drop-28b10d4eff415a7b0b2c/nodeconfig/dropgiver"
-faucet_addr: "cosmos1d....."
-unit: "drop"
