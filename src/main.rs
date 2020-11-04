@@ -5,12 +5,12 @@ extern crate serde_json;
 extern crate serde_yaml;
 #[macro_use]
 extern crate serde_derive;
-
+use std::collections::HashMap;
 use std::env;
 use std::fs::File;
 use std::net::SocketAddr;
 use std::process::Command;
-use warp::Filter;
+use warp::{reject, Filter, Rejection, Reply};
 
 lazy_static! {
     pub static ref CONFIG: Configuration = { get_config() };
@@ -84,14 +84,17 @@ async fn main() {
     });
 
     // POST /send/cosmosaddr/amount
-    let send = warp::post().and(warp::path!("send" / String / String)).map(
-        |dest_addr: String, amount: String| {
-            println!("Oh man a POST happened! with param {}", dest_addr);
-            let ans = send_tx(&CONFIG, dest_addr, amount).unwrap();
-            let ans_j: serde_json::Value = serde_json::from_str(&ans).unwrap();
-            warp::reply::json(&ans_j)
-        },
-    );
+    let send = warp::post()
+        .and(warp::path!("send" / String / String))
+        .and(warp::body::form())
+        .map(
+            |dest_addr: String, amount: String, post_form: HashMap<String, String>| {
+                println!("POST happened! with token {}", post_form["token"]);
+                let ans = send_tx(&CONFIG, dest_addr, amount).unwrap();
+                let ans_j: serde_json::Value = serde_json::from_str(&ans).unwrap();
+                warp::reply::json(&ans_j)
+            },
+        );
 
     let routes = warp::get().and(status).or(warp::post().and(send));
     warp::serve(routes).run(([127, 0, 0, 1], 8080)).await;
