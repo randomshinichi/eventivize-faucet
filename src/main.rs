@@ -1,3 +1,5 @@
+#![feature(proc_macro_hygiene, decl_macro)]
+#[macro_use] extern crate rocket;
 #[macro_use]
 extern crate lazy_static;
 #[macro_use]
@@ -10,7 +12,7 @@ use std::env;
 use std::fs::File;
 use std::net::SocketAddr;
 use std::process::Command;
-use warp::{reject, Filter, Rejection, Reply};
+use rocket::request::Form;
 
 lazy_static! {
     pub static ref CONFIG: Configuration = { get_config() };
@@ -29,6 +31,7 @@ pub struct Configuration {
 }
 
 fn run_command(c: String) -> Result<String, String> {
+    println!("{}", c);
     let c_vec: Vec<&str> = c.split(" ").collect();
     let binary = c_vec[0];
     let output = Command::new(binary)
@@ -58,7 +61,7 @@ fn send_tx(config: &Configuration, dest_addr: String, amount: String) -> Result<
     return run_command(cli_send);
 }
 
-fn status(config: &Configuration) -> Result<String, String> {
+fn run_status(config: &Configuration) -> Result<String, String> {
     let cli_status = format!(
         "{} status --node tcp://{} -o json",
         config.cli_binary_path, config.node_addr
@@ -74,28 +77,32 @@ fn get_config() -> Configuration {
     return config;
 }
 
-#[tokio::main]
-async fn main() {
-    // GET /status
-    let status = warp::path!("status").map(|| {
-        let ans = status(&CONFIG).unwrap();
-        let ans_j: serde_json::Value = serde_json::from_str(&ans).unwrap();
-        warp::reply::json(&ans_j)
-    });
+#[get("/")]
+fn index() -> &'static str {
+    "Hello, world!"
+}
 
-    // POST /send/cosmosaddr/amount
-    let send = warp::post()
-        .and(warp::path!("send" / String / String))
-        .and(warp::body::form())
-        .map(
-            |dest_addr: String, amount: String, post_form: HashMap<String, String>| {
-                println!("POST happened! with token {}", post_form["token"]);
-                let ans = send_tx(&CONFIG, dest_addr, amount).unwrap();
-                let ans_j: serde_json::Value = serde_json::from_str(&ans).unwrap();
-                warp::reply::json(&ans_j)
-            },
-        );
+#[get("/status")]
+fn http_status() -> Result<String, String> {
+    let output = run_status(&CONFIG);
+    return output
+}
+#[derive(FromForm, Debug)]
+struct SendAuth {
+    token: String,
+}
 
-    let routes = warp::get().and(status).or(warp::post().and(send));
-    warp::serve(routes).run(([127, 0, 0, 1], 8080)).await;
+#[post("/send/<to_address>/<amount>", data="<auth>")]
+fn http_send(to_address: String, amount: String, auth: Form<SendAuth>) -> Result<String, String> {
+    println!("{:?}", auth);
+    if auth.token != CONFIG.secret {
+        return Err(String::from("Your token was wrong"));
+    }
+    let output = send_tx(&CONFIG, to_address, amount);
+    return output
+}
+fn main() {
+    rocket::ignite()
+        .mount("/", routes![index, http_status, http_send])
+        .launch();
 }
