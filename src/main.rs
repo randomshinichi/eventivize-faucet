@@ -11,9 +11,10 @@ use std::collections::HashMap;
 use std::env;
 use std::fs::File;
 use std::net::SocketAddr;
-use std::process::Command;
+use std::process::{Command, Output};
 use rocket::request::Form;
-
+use rocket::response::content;
+use rocket::response::status::NotFound;
 lazy_static! {
     pub static ref CONFIG: Configuration = { get_config() };
 }
@@ -30,25 +31,18 @@ pub struct Configuration {
     secret: String, // make sure random people can't call the faucet
 }
 
-fn run_command(c: String) -> Result<String, String> {
+fn run_command(c: String) -> Result<String, Error>{
     println!("{}", c);
     let c_vec: Vec<&str> = c.split(" ").collect();
     let binary = c_vec[0];
-    let output = Command::new(binary)
+    let o = Command::new(binary)
         .args(&c_vec[1..])
         .output()
-        .expect("Could not execute launchpayloadcli command");
-
-    let stdout = String::from_utf8(output.stdout).expect("Found invalid UTF-8");
-    let stderr = String::from_utf8(output.stderr).expect("Found invalid UTF-8");
-    println!("{}\n{}", stdout, stderr);
-    match output.status.success() {
-        true => Ok(stdout),
-        false => Err(stderr),
-    }
+        .unwrap()?;
+    return o.unwrap()?;
 }
 
-fn send_tx(config: &Configuration, dest_addr: String, amount: String) -> Result<String, String> {
+fn send_tx(config: &Configuration, dest_addr: String, amount: String) -> Result<Output, std::io::Error> {
     let cli_options = format!(
         "--home {} --keyring-backend test --chain-id {} --node tcp://{} -o json",
         config.cli_config_path, config.chain_id, config.node_addr
@@ -61,7 +55,7 @@ fn send_tx(config: &Configuration, dest_addr: String, amount: String) -> Result<
     return run_command(cli_send);
 }
 
-fn run_status(config: &Configuration) -> Result<String, String> {
+fn run_status(config: &Configuration) -> Result<Output, std::io::Error> {
     let cli_status = format!(
         "{} status --node tcp://{} -o json",
         config.cli_binary_path, config.node_addr
@@ -83,9 +77,10 @@ fn index() -> &'static str {
 }
 
 #[get("/status")]
-fn http_status() -> Result<String, String> {
-    let output = run_status(&CONFIG);
-    return output
+fn http_status() -> Result<String, NotFound<String>>{
+    let o = run_status(&CONFIG);
+    o.
+    return output;
 }
 #[derive(FromForm, Debug)]
 struct SendAuth {
